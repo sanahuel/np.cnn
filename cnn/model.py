@@ -1,6 +1,6 @@
 import numpy as np
 
-class LinearLayer:
+class FCLayer:
     def __init__(self, n_input, n_output, activation='relu'):
         self.W = np.random.randn(n_output, n_input) * np.sqrt(2 / (n_output + n_input)) # Xavier/Glorot initialization for weights
         self.b = np.zeros((n_output, 1))
@@ -65,8 +65,8 @@ class NN:
     def __init__(self, layers, function='relu'):
         self.structure = layers
         self.input_size = layers[0]
-        self.layers = [LinearLayer(n_input=layers[i], n_output=layers[i + 1]) for i in range(len(layers)-2)]
-        self.layers.append(LinearLayer(n_input=layers[-2], n_output=layers[-1], activation='softmax'))
+        self.layers = [FCLayer(n_input=layers[i], n_output=layers[i + 1]) for i in range(len(layers)-2)]
+        self.layers.append(FCLayer(n_input=layers[-2], n_output=layers[-1], activation='softmax'))
         self.function = function.lower()
 
     def __repr__(self):
