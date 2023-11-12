@@ -102,10 +102,10 @@ class ConvLayer:
                 receptive_field = x[:, i:i + self.k_dim, j:j + self.k_dim]
                 output[0, i // self.stride, j // self.stride] = np.sum(receptive_field * self.filter) + self.bias
 
+        self.cache_act = output
+
         # Apply ReLU activation function
         output = np.maximum(0, output)
-
-        self.cache_act = output
 
         return output
 
@@ -113,14 +113,14 @@ class ConvLayer:
         # Compute the gradient with respect to the filter (dW) and bias (db)
 
         # Apply the gradient of the ReLU activation function
-        delta = delta * (self.cache_act > 0)
+        delta = delta[:, :self.cache_act.shape[1], :self.cache_act.shape[2]] * (self.cache_act > 0)
 
         # Gradients with respect to the filter (convolution operation)
         dW = np.zeros_like(self.filter)
         for i in range(0, self.cache.shape[1] - self.k_dim + 1, self.stride):
             for j in range(0, self.cache.shape[2] - self.k_dim + 1, self.stride):
                 receptive_field = self.cache[:, i:i + self.k_dim, j:j + self.k_dim]
-                dW += np.sum(receptive_field * delta[0, i // self.stride, j // self.stride])
+                dW += np.sum(receptive_field * delta[0, i // self.stride, j // self.stride, None, None], axis=0)
 
         # Gradient with respect to the bias
         db = np.sum(delta)
@@ -132,7 +132,6 @@ class ConvLayer:
                 dx[:, i:i + self.k_dim, j:j + self.k_dim] += self.filter * delta[0, i // self.stride, j // self.stride]
 
         return dx, dW, db
-
         
     
 
