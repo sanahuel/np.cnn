@@ -51,15 +51,62 @@ class FCLayer:
 
         return dx, dW, db
         
+class Flatten:
+    def __init__(self):
+        self.input_shape = None
+
+    def __repr__(self):
+        return 'Flatten Layer'
+
+    def forward(self, x):
+        self.input_shape = x.shape
+        return x.flatten()
+
+    def backward(self, delta):
+        return delta.reshape(self.input_shape)
 
 class ConvLayer:
-       def __init__(self, k_dim = 3, stride = 1, padding = 1):
+    def __init__(self, k_dim = 3, stride = 1, padding = 1):
         self.k_dim = k_dim
         self.stride = stride
         self.filter = np.random.uniform(-0.5, 0.5, (self.k_dim, self.k_dim))
         self.filter = self.filter/self.filter.sum() #normalizing the filter
         self.bias = np.zeros((1, 1))
         self.padding = padding
+        self.cache = None
+        self.cache_act = None
+
+    def __repr__(self):
+        return f'k_dim: {self.k_dim}, stride: {self.stride}, padding: {self.padding}'
+    
+    def forward(self, x):
+        # padding
+        if self.padding > 0:
+            pad_width = ((0, 0), (self.padding, self.padding), (self.padding, self.padding))
+            x = np.pad(x, pad_width, 'constant', constant_values=0)
+        
+        self.cache = x
+
+        # input dimensions
+        channels, height, width = x.shape
+
+        # output dimensions
+        out_height = (height - self.k_dim) // self.stride + 1
+        out_width = (width - self.k_dim) // self.stride + 1
+
+        # initialize output
+        output = np.zeros((1, out_height, out_width))
+
+        for i in range(0, height - self.k_dim + 1, self.stride):
+            for j in range(0, width - self.k_dim + 1, self.stride):
+                receptive_field = x[:, i:i + self.k_dim, j:j + self.k_dim]
+                output[0, i // self.stride, j // self.stride] = np.sum(receptive_field * self.filter) + self.bias
+
+        self.cache_act = output
+
+        return output
+        
+    
 
 class NN:
     def __init__(self, layers, function='relu'):
@@ -107,8 +154,13 @@ class NN:
 
     
 class CNN:
-    def __init__(self) -> None:
-        pass
+    def __init__(self, layers) -> None:
+        self.layers = layers
+
+    def forward(self, x):
+        for layer in self.layers:
+            x = layer.forward(x)
+        return x
 
     def train(self):
         pass
