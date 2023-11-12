@@ -60,7 +60,7 @@ class Flatten:
 
     def forward(self, x):
         self.input_shape = x.shape
-        return x.flatten()
+        return x.flatten().reshape(-1, 1)
 
     def backward(self, delta):
         return delta.reshape(self.input_shape)
@@ -69,9 +69,9 @@ class ConvLayer:
     def __init__(self, k_dim = 3, stride = 1, padding = 1):
         self.k_dim = k_dim
         self.stride = stride
-        self.filter = np.random.uniform(-0.5, 0.5, (self.k_dim, self.k_dim))
-        self.filter = self.filter/self.filter.sum() #normalizing the filter
-        self.bias = np.zeros((1, 1))
+        self.filter = np.random.randn(self.k_dim, self.k_dim) * np.sqrt(2 / (self.k_dim * self.k_dim))
+        # self.filter = self.filter/self.filter.sum() #normalizing the filter
+        self.bias = np.random.randn(1, 1) * 0.01
         self.padding = padding
         self.cache = None
         self.cache_act = None
@@ -102,9 +102,37 @@ class ConvLayer:
                 receptive_field = x[:, i:i + self.k_dim, j:j + self.k_dim]
                 output[0, i // self.stride, j // self.stride] = np.sum(receptive_field * self.filter) + self.bias
 
+        # Apply ReLU activation function
+        output = np.maximum(0, output)
+
         self.cache_act = output
 
         return output
+
+    def backward(self, delta):
+        # Compute the gradient with respect to the filter (dW) and bias (db)
+
+        # Apply the gradient of the ReLU activation function
+        delta = delta * (self.cache_act > 0)
+
+        # Gradients with respect to the filter (convolution operation)
+        dW = np.zeros_like(self.filter)
+        for i in range(0, self.cache.shape[1] - self.k_dim + 1, self.stride):
+            for j in range(0, self.cache.shape[2] - self.k_dim + 1, self.stride):
+                receptive_field = self.cache[:, i:i + self.k_dim, j:j + self.k_dim]
+                dW += np.sum(receptive_field * delta[0, i // self.stride, j // self.stride])
+
+        # Gradient with respect to the bias
+        db = np.sum(delta)
+
+        # Backpropagate the gradient to the previous layer
+        dx = np.zeros_like(self.cache)
+        for i in range(0, self.cache.shape[1] - self.k_dim + 1, self.stride):
+            for j in range(0, self.cache.shape[2] - self.k_dim + 1, self.stride):
+                dx[:, i:i + self.k_dim, j:j + self.k_dim] += self.filter * delta[0, i // self.stride, j // self.stride]
+
+        return dx, dW, db
+
         
     
 
@@ -138,19 +166,23 @@ class NN:
                 loss_gradient = x - y
                 for layer in reversed(self.layers):
                     loss_gradient, dW, db = layer.backward(loss_gradient)
-                    # Now you have the gradients, update the parameters
+                    # update the parameters
                     layer.W -= lr * dW
                     layer.b -= lr * db
 
             # print accuracy for epoch
             print(f'Epoch {epoch} accuracy: {n_correct / len(Y) * 100: .3f}%')
 
-    def test(self,x_input):
-        x = x_input
-        for layer in self.layers:
-            x = layer.forward(x)
-        
-        return x
+    def test(self, X, Y):
+        n_correct = 0
+        for x, y in zip(X, Y):
+            for layer in self.layers:
+                x = layer.forward(x)
+            
+            # count for accuracy
+            n_correct += int(np.argmax(x) == np.argmax(y))
+
+        print(f'Test accuracy: {n_correct / len(Y) * 100: .3f}%')
 
     
 class CNN:
@@ -162,8 +194,46 @@ class CNN:
             x = layer.forward(x)
         return x
 
-    def train(self):
-        pass
+    def train(self, X, Y, epochs, lr=0.01):
+        print(f'Training for {epochs} epochs...')
+        for epoch in range(epochs):
+            n_correct = 0
+            for x_input, y in zip(X, Y):
+                # forward
+                x = x_input
+                for layer in self.layers:
+                    x = layer.forward(x)
 
-    def test(self):
-        pass
+                # count for accuracy
+                n_correct += int(np.argmax(x) == np.argmax(y))
+
+                # backpropagation
+                loss_gradient = x - y
+                for layer in reversed(self.layers):
+                    if isinstance(layer, FCLayer):
+                        loss_gradient, dW, db = layer.backward(loss_gradient)
+                        layer.W -= lr * dW
+                        layer.b -= lr * db
+                    elif isinstance(layer, ConvLayer): 
+                        loss_gradient, dW, db = layer.backward(loss_gradient)
+                        layer.filter -= lr * dW
+                        layer.bias -= lr * db
+                    elif isinstance(layer, Flatten): 
+                        loss_gradient = layer.backward(loss_gradient)
+                
+                # print(loss_gradient)
+
+            # print accuracy for epoch
+            print(f'Epoch {epoch} accuracy: {n_correct / len(Y) * 100: .3f}%')
+
+
+    def test(self, X, Y):
+        n_correct = 0
+        for x, y in zip(X, Y):
+            for layer in self.layers:
+                x = layer.forward(x)
+            
+            # count for accuracy
+            n_correct += int(np.argmax(x) == np.argmax(y))
+
+        print(f'Test accuracy: {n_correct / len(Y) * 100: .3f}%')
