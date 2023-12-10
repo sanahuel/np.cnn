@@ -2,7 +2,7 @@ import numpy as np
 
 class FCLayer:
     def __init__(self, n_input, n_output, activation='relu'):
-        self.W = np.random.randn(n_output, n_input) * np.sqrt(2 / (n_output + n_input)) # Xavier/Glorot initialization for weights
+        self.W = np.random.randn(n_output, n_input) * np.sqrt(2 / (n_output + n_input)) # Xavier Glorot initialization
         self.b = np.zeros((n_output, 1))
         self.activation = activation
         self.cache = None
@@ -69,8 +69,9 @@ class ConvLayer:
     def __init__(self, k_dim = 3, stride = 1, padding = 1):
         self.k_dim = k_dim
         self.stride = stride
+
+        # kernel size k x k with Xavier Glorot initialization
         self.filter = np.random.randn(self.k_dim, self.k_dim) * np.sqrt(2 / (self.k_dim * self.k_dim))
-        # self.filter = self.filter/self.filter.sum() #normalizing the filter
         self.bias = np.random.randn(1, 1) * 0.01
         self.padding = padding
         self.cache = None
@@ -82,7 +83,7 @@ class ConvLayer:
     def forward(self, x):
         # padding
         if self.padding > 0:
-            pad_width = ((0, 0), (self.padding, self.padding), (self.padding, self.padding))
+            pad_width = ((0, 0), (self.padding, self.padding), (self.padding, self.padding)) # ((batch), (width), (height))
             x = np.pad(x, pad_width, 'constant', constant_values=0)
         
         self.cache = x
@@ -97,35 +98,33 @@ class ConvLayer:
         # initialize output
         output = np.zeros((1, out_height, out_width))
 
-        for i in range(0, height - self.k_dim + 1, self.stride):
-            for j in range(0, width - self.k_dim + 1, self.stride):
-                receptive_field = x[:, i:i + self.k_dim, j:j + self.k_dim]
-                output[0, i // self.stride, j // self.stride] = np.sum(receptive_field * self.filter) + self.bias
+        for i in range(0, height - self.k_dim + 1, self.stride): # height
+            for j in range(0, width - self.k_dim + 1, self.stride): # width
+                receptive_field = x[:, i:i + self.k_dim, j:j + self.k_dim] # cut out the input to filter
+                output[0, i // self.stride, j // self.stride] = np.sum(receptive_field * self.filter) + self.bias # convolution
 
-        self.cache_act = output
+        self.cache_act = output # cache for backprop
 
-        # Apply ReLU activation function
+        # ReLU activation function
         output = np.maximum(0, output)
 
         return output
 
     def backward(self, delta):
-        # Compute the gradient with respect to the filter (dW) and bias (db)
-
-        # Apply the gradient of the ReLU activation function
+        # gradient of the ReLU activation function
         delta = delta[:, :self.cache_act.shape[1], :self.cache_act.shape[2]] * (self.cache_act > 0)
 
-        # Gradients with respect to the filter (convolution operation)
+        # backwards conv for the filter
         dW = np.zeros_like(self.filter)
         for i in range(0, self.cache.shape[1] - self.k_dim + 1, self.stride):
             for j in range(0, self.cache.shape[2] - self.k_dim + 1, self.stride):
                 receptive_field = self.cache[:, i:i + self.k_dim, j:j + self.k_dim]
                 dW += np.sum(receptive_field * delta[0, i // self.stride, j // self.stride, None, None], axis=0)
 
-        # Gradient with respect to the bias
+        # backewrads for the bias
         db = np.sum(delta)
 
-        # Backpropagate the gradient to the previous layer
+        # backpropagate
         dx = np.zeros_like(self.cache)
         for i in range(0, self.cache.shape[1] - self.k_dim + 1, self.stride):
             for j in range(0, self.cache.shape[2] - self.k_dim + 1, self.stride):
