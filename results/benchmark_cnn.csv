@@ -1,0 +1,5 @@
+dataset,framework,epochs,batch_size,s_per_epoch,test_acc,cpu,numpy_version,torch_version,torch_threads
+mnist,np.cnn,5,64,35.785326360026374,0.988,"Intel64 Family 6 Model 165 Stepping 2, GenuineIntel",2.2.6,,
+mnist,PyTorch,5,64,9.231779899960383,0.9866,"Intel64 Family 6 Model 165 Stepping 2, GenuineIntel",2.2.6,2.14.1+cpu,6
+fashion,np.cnn,5,64,35.783823100011794,0.8958,"Intel64 Family 6 Model 165 Stepping 2, GenuineIntel",2.2.6,,
+fashion,PyTorch,5,64,10.527887259982526,0.8932,"Intel64 Family 6 Model 165 Stepping 2, GenuineIntel",2.2.6,2.14.1+cpu,6
