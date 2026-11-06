@@ -106,7 +106,7 @@ class ConvLayer:
         for i in range(0, height - self.k_dim + 1, self.stride): # height
             for j in range(0, width - self.k_dim + 1, self.stride): # width
                 receptive_field = x[:, i:i + self.k_dim, j:j + self.k_dim] # cut out the input to filter
-                output[0, i // self.stride, j // self.stride] = np.sum(receptive_field * self.filter) + self.bias # convolution
+                output[0, i // self.stride, j // self.stride] = np.sum(receptive_field * self.filter) + self.bias[0, 0] # convolution
 
         self.cache_act = output # cache for backprop
 
