@@ -2,7 +2,11 @@ import numpy as np
 
 class FCLayer:
     def __init__(self, n_input, n_output, activation='relu'):
-        self.W = np.random.randn(n_output, n_input) * np.sqrt(2 / (n_output + n_input)) # Xavier Glorot initialization
+        if activation == 'relu':
+            std = np.sqrt(2.0 / n_input)                # He (Kaiming) initialization
+        else:
+            std = np.sqrt(2.0 / (n_input + n_output))   # Xavier/Glorot (sigmoid, tanh, softmax)
+        self.W = np.random.randn(n_output, n_input) * std
         self.b = np.zeros((n_output, 1))
         self.activation = activation
         self.cache = None
@@ -16,14 +20,13 @@ class FCLayer:
         return np.maximum(0, x)
 
     def sigmoid(self, x, derivative = False):
-        np.clip(x, -500, 500)
-        if derivative: return (np.exp(-x))/((np.exp(-x)+1)**2)
-        return 1 / (1 + np.exp(-x))
+        x = np.clip(x, -500, 500)
+        s = 1.0 / (1.0 + np.exp(-x))
+        return s * (1.0 - s) if derivative else s
 
-    def softmax(self,x, derivative = False):
-        exps = np.exp(x - x.max())
-        if derivative: return exps / np.sum(exps, axis=0) * (1 - exps / np.sum(exps, axis=0))
-        return exps / np.sum(exps, axis=0)
+    def softmax(self, x):
+        exps = np.exp(x - x.max(axis=0, keepdims=True))
+        return exps / np.sum(exps, axis=0, keepdims=True)
 
     def forward(self, x):
         self.cache = x
@@ -43,7 +46,9 @@ class FCLayer:
         elif self.activation == 'sigmoid':
             delta = delta * self.sigmoid(self.cache_act, derivative=True)
         elif self.activation == 'softmax':
-            delta = self.softmax(self.cache_act, derivative=True) * delta
+            # NN.train / CNN.train pass (p - y), which is already dL/dz for softmax + cross-entropy.
+            # It must not be multiplied by the softmax derivative again.
+            pass
 
         dW = delta @ self.cache.T
         db = np.sum(delta, axis=1, keepdims=True)
@@ -70,7 +75,7 @@ class ConvLayer:
         self.k_dim = k_dim
         self.stride = stride
 
-        # kernel size k x k with Xavier Glorot initialization
+        # kernel k x k, He initialization (fan_in = k*k: a single 2D filter shared by all channels)
         self.filter = np.random.randn(self.k_dim, self.k_dim) * np.sqrt(2 / (self.k_dim * self.k_dim))
         self.bias = np.random.randn(1, 1) * 0.01
         self.padding = padding
@@ -138,14 +143,16 @@ class NN:
     def __init__(self, layers, function='relu'):
         self.structure = layers
         self.input_size = layers[0]
-        self.layers = [FCLayer(n_input=layers[i], n_output=layers[i + 1]) for i in range(len(layers)-2)]
-        self.layers.append(FCLayer(n_input=layers[-2], n_output=layers[-1], activation='softmax'))
         self.function = function.lower()
+        if self.function not in ('relu', 'sigmoid'):
+            raise ValueError(f"function must be 'relu' or 'sigmoid', got {function!r}")
+        self.layers = [FCLayer(n_input=layers[i], n_output=layers[i + 1], activation=self.function)
+                       for i in range(len(layers)-2)]
+        self.layers.append(FCLayer(n_input=layers[-2], n_output=layers[-1], activation='softmax'))
 
     def __repr__(self):
-        for layer in self.layers:
-            print(layer.__repr__())
-        return f'NN structure: {self.structure}'
+        lines = [f'NN structure: {self.structure}'] + [f'  {layer!r}' for layer in self.layers]
+        return '\n'.join(lines)
 
     def train(self, X, Y, epochs, lr=0.01):
         print(f'Training for {epochs} epochs...')
