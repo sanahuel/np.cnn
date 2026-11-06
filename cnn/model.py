@@ -116,8 +116,9 @@ class ConvLayer:
         return output
 
     def backward(self, delta):
+        # delta has the shape of this layer's output: (1, out_h, out_w)
         # gradient of the ReLU activation function
-        delta = delta[:, :self.cache_act.shape[1], :self.cache_act.shape[2]] * (self.cache_act > 0)
+        delta = delta * (self.cache_act > 0)
 
         # backwards conv for the filter
         dW = np.zeros_like(self.filter)
@@ -129,11 +130,16 @@ class ConvLayer:
         # backewrads for the bias
         db = np.sum(delta)
 
-        # backpropagate
+        # backpropagate (padded shape)
         dx = np.zeros_like(self.cache)
         for i in range(0, self.cache.shape[1] - self.k_dim + 1, self.stride):
             for j in range(0, self.cache.shape[2] - self.k_dim + 1, self.stride):
                 dx[:, i:i + self.k_dim, j:j + self.k_dim] += self.filter * delta[0, i // self.stride, j // self.stride]
+
+        # remove the padding: p pixels from every side (not the top-left corner)
+        if self.padding > 0:
+            p = self.padding
+            dx = dx[:, p:-p, p:-p]
 
         return dx, dW, db
         
