@@ -294,3 +294,51 @@ class NN(_LegacyModel):
 
     def __repr__(self):
         return f"NN structure: {self.structure}\n{self.model!r}"
+
+
+# =============================================================================
+# Solo np.cnn: todo lo que hay por encima de esta línea es idéntico a np.nn
+# =============================================================================
+from .layers import Conv2d, MaxPool2d, Flatten  # noqa: E402,F401  (the old API imports Flatten from cnn.model)
+
+
+class ConvLayer(_Composite):
+    """Old facade: Conv2d followed by ReLU. 1 -> 1 channel by default, as the original."""
+
+    def __init__(self, k_dim=3, stride=1, padding=1, in_channels=1, out_channels=1):
+        super().__init__()
+        self.k_dim, self.stride, self.padding = k_dim, stride, padding
+        self.conv = Conv2d(in_channels, out_channels, k_dim, stride, padding)
+        self.act = ReLU()
+
+    def unroll(self):
+        return [self.conv, self.act]
+
+    def __repr__(self):
+        return (f"ConvLayer(k_dim={self.k_dim}, stride={self.stride}, padding={self.padding}, "
+                f"in_channels={self.conv.in_channels}, out_channels={self.conv.out_channels})")
+
+
+class CNN(_LegacyModel):
+    """Old facade. Accepts FCLayer, ConvLayer, Flatten or any new Layer.
+
+    The last layer must be FCLayer(..., 'softmax'): it produces logits and the softmax lives in
+    CrossEntropy, as the old code assumed. Images are (N, C, H, W); a single sample (C, H, W) is
+    still accepted by forward() and returns (classes, 1) like before.
+    """
+
+    def __init__(self, layers):
+        super().__init__(layers)
+
+    def forward(self, x):
+        x = np.asarray(x)
+        single = x.ndim == 3                      # one sample (C, H, W), as in the old code
+        probs = super().forward(x[None] if single else x)
+        return probs[0][:, None] if single else probs
+
+    def _prep_X(self, X):
+        X = np.asarray(X)
+        return X[:, None] if X.ndim == 3 else X   # (N, H, W) -> (N, 1, H, W)
+
+    def __repr__(self):
+        return f"CNN\n{self.model!r}"

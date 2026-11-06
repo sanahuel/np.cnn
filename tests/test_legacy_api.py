@@ -1,6 +1,7 @@
 import numpy as np
 from sklearn.datasets import load_digits
 
+from cnn import set_seed
 from cnn.model import NN, CNN, FCLayer, Flatten, ConvLayer
 
 
@@ -47,7 +48,9 @@ def test_cnn_forward_single_sample():
 
 
 def test_cnn_legacy_min_accuracy(capsys):
-    # umbral = 0.9 x la peor accuracy observada en 3 semillas (0.7375)
+    # Old architecture (1->1 channel conv + ReLU, zero bias) can start 'dead' with an unlucky seed
+    # (seed 0: loss stuck at 2.30). Seeds 1-4 reach 0.82-0.96 after 5 epochs; threshold = 0.85 x min.
+    set_seed(1)
     X, Y = _digits_legacy()
     X = X.reshape(len(X), 1, 8, 8)
     cnn = _cnn()
@@ -56,4 +59,4 @@ def test_cnn_legacy_min_accuracy(capsys):
     cnn.test(X, Y)
     out = capsys.readouterr().out
     acc = float(out.split(":")[1].strip().rstrip("%")) / 100
-    assert acc >= 0.66
+    assert acc >= 0.70
