@@ -1,250 +1,296 @@
 import numpy as np
 
-class FCLayer:
-    def __init__(self, n_input, n_output, activation='relu'):
-        if activation == 'relu':
-            std = np.sqrt(2.0 / n_input)                # He (Kaiming) initialization
-        else:
-            std = np.sqrt(2.0 / (n_input + n_output))   # Xavier/Glorot (sigmoid, tanh, softmax)
-        self.W = np.random.randn(n_output, n_input) * std
-        self.b = np.zeros((n_output, 1))
-        self.activation = activation
-        self.cache = None
-        self.cache_act = None
+from .layers import (Layer, Linear, ReLU, Sigmoid, Tanh, get_default_dtype, get_rng)
+from .losses import CrossEntropy
+from .optim import SGD, Adam
 
-    def __repr__(self):
-        return f'W: {self.W.shape}, b: {self.b.shape} with activation: {self.activation}'
 
-    def relu(self, x, derivative = False):
-        if derivative: return np.where(x>0, 1, 0)
-        return np.maximum(0, x)
+def softmax(z):
+    """Row-wise, numerically stable softmax."""
+    e = np.exp(z - z.max(axis=1, keepdims=True))
+    return e / e.sum(axis=1, keepdims=True)
 
-    def sigmoid(self, x, derivative = False):
-        x = np.clip(x, -500, 500)
-        s = 1.0 / (1.0 + np.exp(-x))
-        return s * (1.0 - s) if derivative else s
 
-    def softmax(self, x):
-        exps = np.exp(x - x.max(axis=0, keepdims=True))
-        return exps / np.sum(exps, axis=0, keepdims=True)
+def _labels(y):
+    """One-hot (N, C) or integer (N,) -> integer labels (N,)."""
+    y = np.asarray(y)
+    return y.argmax(axis=1) if y.ndim == 2 else y
 
-    def forward(self, x):
-        self.cache = x
-        self.cache_act = self.W @ x + self.b
-        if self.activation == 'relu':
-            x = self.relu(self.W @ x + self.b)
-        elif self.activation == 'sigmoid':
-            x = self.sigmoid(self.W @ x + self.b)
-        elif self.activation == 'softmax':
-            x = self.softmax(self.W @ x + self.b)
 
-        return x
+def _from_legacy(a):
+    """(N, F, 1) -> (N, F). Any other shape is left unchanged."""
+    a = np.asarray(a)
+    if a.ndim == 3 and a.shape[-1] == 1:
+        return a[..., 0]
+    return a
 
-    def backward(self, delta):
-        if self.activation == 'relu':
-            delta = delta * self.relu(self.cache_act, derivative=True)
-        elif self.activation == 'sigmoid':
-            delta = delta * self.sigmoid(self.cache_act, derivative=True)
-        elif self.activation == 'softmax':
-            # NN.train / CNN.train pass (p - y), which is already dL/dz for softmax + cross-entropy.
-            # It must not be multiplied by the softmax derivative again.
-            pass
 
-        dW = delta @ self.cache.T
-        db = np.sum(delta, axis=1, keepdims=True)
-        dx = self.W.T @ delta
+def _format_epoch(epoch, epochs, logs):
+    msg = f"Epoch {epoch + 1}/{epochs} - loss: {logs['loss']:.4f}"
+    if not np.isnan(logs["acc"]):
+        msg += f" - accuracy: {logs['acc'] * 100:.3f}%"
+    if "val_loss" in logs:
+        msg += f" - val_loss: {logs['val_loss']:.4f}"
+        if not np.isnan(logs["val_acc"]):
+            msg += f" - val_accuracy: {logs['val_acc'] * 100:.3f}%"
+    return msg
 
-        return dx, dW, db
-        
-class Flatten:
-    def __init__(self):
-        self.input_shape = None
 
-    def __repr__(self):
-        return 'Flatten Layer'
+class Sequential:
+    """Chain of layers. forward() returns logits; the loss (CrossEntropy) includes the softmax."""
 
-    def forward(self, x):
-        self.input_shape = x.shape
-        return x.flatten().reshape(-1, 1)
+    def __init__(self, layers):
+        self.layers = []
+        for layer in layers:
+            if hasattr(layer, "unroll"):
+                self.layers.extend(layer.unroll())
+            else:
+                self.layers.append(layer)
+        self.history = None
 
-    def backward(self, delta):
-        return delta.reshape(self.input_shape)
-
-class ConvLayer:
-    def __init__(self, k_dim = 3, stride = 1, padding = 1):
-        self.k_dim = k_dim
-        self.stride = stride
-
-        # kernel k x k, He initialization (fan_in = k*k: a single 2D filter shared by all channels)
-        self.filter = np.random.randn(self.k_dim, self.k_dim) * np.sqrt(2 / (self.k_dim * self.k_dim))
-        self.bias = np.random.randn(1, 1) * 0.01
-        self.padding = padding
-        self.cache = None
-        self.cache_act = None
-
-    def __repr__(self):
-        return f'k_dim: {self.k_dim}, stride: {self.stride}, padding: {self.padding}'
-    
-    def forward(self, x):
-        # padding
-        if self.padding > 0:
-            pad_width = ((0, 0), (self.padding, self.padding), (self.padding, self.padding)) # ((batch), (width), (height))
-            x = np.pad(x, pad_width, 'constant', constant_values=0)
-        
-        self.cache = x
-
-        # input dimensions
-        channels, height, width = x.shape
-
-        # output dimensions
-        out_height = (height - self.k_dim) // self.stride + 1
-        out_width = (width - self.k_dim) // self.stride + 1
-
-        # initialize output
-        output = np.zeros((1, out_height, out_width))
-
-        for i in range(0, height - self.k_dim + 1, self.stride): # height
-            for j in range(0, width - self.k_dim + 1, self.stride): # width
-                receptive_field = x[:, i:i + self.k_dim, j:j + self.k_dim] # cut out the input to filter
-                output[0, i // self.stride, j // self.stride] = np.sum(receptive_field * self.filter) + self.bias[0, 0] # convolution
-
-        self.cache_act = output # cache for backprop
-
-        # ReLU activation function
-        output = np.maximum(0, output)
-
-        return output
-
-    def backward(self, delta):
-        # delta has the shape of this layer's output: (1, out_h, out_w)
-        # gradient of the ReLU activation function
-        delta = delta * (self.cache_act > 0)
-
-        # backwards conv for the filter
-        dW = np.zeros_like(self.filter)
-        for i in range(0, self.cache.shape[1] - self.k_dim + 1, self.stride):
-            for j in range(0, self.cache.shape[2] - self.k_dim + 1, self.stride):
-                receptive_field = self.cache[:, i:i + self.k_dim, j:j + self.k_dim]
-                dW += np.sum(receptive_field * delta[0, i // self.stride, j // self.stride, None, None], axis=0)
-
-        # backewrads for the bias
-        db = np.sum(delta)
-
-        # backpropagate (padded shape)
-        dx = np.zeros_like(self.cache)
-        for i in range(0, self.cache.shape[1] - self.k_dim + 1, self.stride):
-            for j in range(0, self.cache.shape[2] - self.k_dim + 1, self.stride):
-                dx[:, i:i + self.k_dim, j:j + self.k_dim] += self.filter * delta[0, i // self.stride, j // self.stride]
-
-        # remove the padding: p pixels from every side (not the top-left corner)
-        if self.padding > 0:
-            p = self.padding
-            dx = dx[:, p:-p, p:-p]
-
-        return dx, dW, db
-        
-    
-
-class NN:
-    def __init__(self, layers, function='relu'):
-        self.structure = layers
-        self.input_size = layers[0]
-        self.function = function.lower()
-        if self.function not in ('relu', 'sigmoid'):
-            raise ValueError(f"function must be 'relu' or 'sigmoid', got {function!r}")
-        self.layers = [FCLayer(n_input=layers[i], n_output=layers[i + 1], activation=self.function)
-                       for i in range(len(layers)-2)]
-        self.layers.append(FCLayer(n_input=layers[-2], n_output=layers[-1], activation='softmax'))
-
-    def __repr__(self):
-        lines = [f'NN structure: {self.structure}'] + [f'  {layer!r}' for layer in self.layers]
-        return '\n'.join(lines)
-
-    def train(self, X, Y, epochs, lr=0.01):
-        print(f'Training for {epochs} epochs...')
-        for epoch in range(epochs):
-            n_correct = 0
-            for x_input, y in zip(X, Y):
-                # forward
-                x = x_input
-                for layer in self.layers:
-                    x = layer.forward(x)
-
-                # count for accuracy
-                n_correct += int(np.argmax(x) == np.argmax(y))
-
-                # backpropagation
-                loss_gradient = x - y
-                for layer in reversed(self.layers):
-                    loss_gradient, dW, db = layer.backward(loss_gradient)
-                    # update the parameters
-                    layer.W -= lr * dW
-                    layer.b -= lr * db
-
-            # print accuracy for epoch
-            print(f'Epoch {epoch} accuracy: {n_correct / len(Y) * 100: .3f}%')
-
-    def test(self, X, Y):
-        n_correct = 0
-        for x, y in zip(X, Y):
-            for layer in self.layers:
-                x = layer.forward(x)
-            
-            # count for accuracy
-            n_correct += int(np.argmax(x) == np.argmax(y))
-
-        print(f'Test accuracy: {n_correct / len(Y) * 100: .3f}%')
-
-    
-class CNN:
-    def __init__(self, layers) -> None:
-        self.layers = layers
-
+    # --- core -----------------------------------------------------------
     def forward(self, x):
         for layer in self.layers:
             x = layer.forward(x)
         return x
 
-    def train(self, X, Y, epochs, lr=0.01):
-        print(f'Training for {epochs} epochs...')
+    __call__ = forward
+
+    def backward(self, grad):
+        for layer in reversed(self.layers):
+            grad = layer.backward(grad)
+        return grad
+
+    def parameters(self):
+        """[(param, grad), ...] in a stable order."""
+        out = []
+        for layer in self.layers:
+            p, g = layer.params(), layer.grads()
+            out.extend((p[k], g[k]) for k in p)
+        return out
+
+    def train(self):
+        for layer in self.layers:
+            layer.train()
+        return self
+
+    def eval(self):
+        for layer in self.layers:
+            layer.eval()
+        return self
+
+    @property
+    def dtype(self):
+        for layer in self.layers:
+            for p in layer.params().values():
+                return p.dtype
+        return np.dtype(get_default_dtype())
+
+    # --- training -------------------------------------------------------
+    def fit(self, X, y, epochs=10, batch_size=32, optimizer=None, loss=None,
+            validation_data=None, shuffle=True, verbose=True, callbacks=(), seed=None):
+        optimizer = optimizer if optimizer is not None else Adam(lr=1e-3)
+        loss = loss if loss is not None else CrossEntropy()
+        is_clf = isinstance(loss, CrossEntropy)
+        X = np.asarray(X, dtype=self.dtype)
+        y = np.asarray(y)
+        rng = np.random.default_rng(seed) if seed is not None else get_rng()
+        history = {"loss": [], "acc": []}
+        if validation_data is not None:
+            history.update(val_loss=[], val_acc=[])
+
+        n = len(X)
         for epoch in range(epochs):
-            n_correct = 0
-            for x_input, y in zip(X, Y):
-                # forward
-                x = x_input
-                for layer in self.layers:
-                    x = layer.forward(x)
+            self.train()
+            order = rng.permutation(n) if shuffle else np.arange(n)
+            total_loss, correct = 0.0, 0
+            for start in range(0, n, batch_size):
+                idx = order[start:start + batch_size]
+                xb, yb = X[idx], y[idx]
+                out = self.forward(xb)
+                total_loss += loss(out, yb) * len(idx)
+                self.backward(loss.backward())
+                optimizer.step(self.parameters())
+                if is_clf:
+                    correct += int((out.argmax(1) == _labels(yb)).sum())
 
-                # count for accuracy
-                n_correct += int(np.argmax(x) == np.argmax(y))
+            logs = {"loss": total_loss / n, "acc": correct / n if is_clf else float("nan")}
+            if validation_data is not None:
+                logs["val_loss"], logs["val_acc"] = self.evaluate(*validation_data, loss=loss)
+            for k, v in logs.items():
+                history[k].append(v)
+            if verbose:
+                print(_format_epoch(epoch, epochs, logs))
+            for cb in callbacks:
+                cb(self, epoch, logs)
 
-                # backpropagation
-                loss_gradient = x - y
-                for layer in reversed(self.layers):
-                    if isinstance(layer, FCLayer):
-                        loss_gradient, dW, db = layer.backward(loss_gradient)
-                        layer.W -= lr * dW
-                        layer.b -= lr * db
-                    elif isinstance(layer, ConvLayer): 
-                        loss_gradient, dW, db = layer.backward(loss_gradient)
-                        layer.filter -= lr * dW
-                        layer.bias -= lr * db
-                    elif isinstance(layer, Flatten): 
-                        loss_gradient = layer.backward(loss_gradient)
-                
-                # print(loss_gradient)
+        self.history = history
+        return history
 
-            # print accuracy for epoch
-            print(f'Epoch {epoch} accuracy: {n_correct / len(Y) * 100: .3f}%')
+    # --- inference ------------------------------------------------------
+    def _logits(self, X, batch_size):
+        self.eval()
+        X = np.asarray(X, dtype=self.dtype)
+        return np.concatenate([self.forward(X[i:i + batch_size])
+                               for i in range(0, len(X), batch_size)])
+
+    def predict_proba(self, X, batch_size=256):
+        return softmax(self._logits(X, batch_size))
+
+    def predict(self, X, batch_size=256):
+        return self._logits(X, batch_size).argmax(axis=1)
+
+    def evaluate(self, X, y, loss=None, batch_size=256):
+        """Returns (loss, accuracy); accuracy is nan if the loss is not a classification loss."""
+        loss = loss if loss is not None else CrossEntropy()
+        logits = self._logits(X, batch_size)
+        y = np.asarray(y)
+        value = loss(logits, y)
+        if isinstance(loss, CrossEntropy):
+            acc = float((logits.argmax(1) == _labels(y)).mean())
+        else:
+            acc = float("nan")
+        return value, acc
+
+    # --- persistence ----------------------------------------------------
+    def save(self, path):
+        arrays = {f"{i}.{k}": p for i, layer in enumerate(self.layers)
+                  for k, p in layer.params().items()}
+        path = str(path)
+        np.savez(path if path.endswith(".npz") else path + ".npz", **arrays)
+
+    def load(self, path):
+        path = str(path)
+        if not path.endswith(".npz"):
+            path += ".npz"
+        with np.load(path) as data:
+            for i, layer in enumerate(self.layers):
+                for k, p in layer.params().items():
+                    key = f"{i}.{k}"
+                    if key not in data.files:
+                        raise ValueError(f"missing parameter {key!r} in {path}")
+                    if data[key].shape != p.shape:
+                        raise ValueError(f"shape mismatch for {key!r}: file {data[key].shape}, model {p.shape}")
+                    p[...] = data[key]
+
+    def __repr__(self):
+        n_params = sum(p.size for p, _ in self.parameters())
+        lines = [f"  ({i}) {layer!r}" for i, layer in enumerate(self.layers)]
+        return "Sequential(\n" + "\n".join(lines) + f"\n)  # {n_params} parameters"
 
 
-    def test(self, X, Y):
-        n_correct = 0
-        for x, y in zip(X, Y):
-            for layer in self.layers:
-                x = layer.forward(x)
-            
-            # count for accuracy
-            n_correct += int(np.argmax(x) == np.argmax(y))
+# --- composite layers (old API) -----------------------------------------
+class _Composite(Layer):
+    """A layer made of sub-layers. Sequential unrolls it; standalone it delegates."""
 
-        print(f'Test accuracy: {n_correct / len(Y) * 100: .3f}%')
+    def unroll(self):
+        raise NotImplementedError
+
+    def forward(self, x):
+        for layer in self.unroll():
+            x = layer.forward(x)
+        return x
+
+    def backward(self, grad):
+        for layer in reversed(self.unroll()):
+            grad = layer.backward(grad)
+        return grad
+
+    def params(self):
+        return {f"{i}.{k}": p for i, l in enumerate(self.unroll()) for k, p in l.params().items()}
+
+    def grads(self):
+        return {f"{i}.{k}": g for i, l in enumerate(self.unroll()) for k, g in l.grads().items()}
+
+    def train(self):
+        super().train()
+        for l in self.unroll():
+            l.train()
+        return self
+
+    def eval(self):
+        super().eval()
+        for l in self.unroll():
+            l.eval()
+        return self
+
+
+_ACTIVATIONS = {"relu": ReLU, "sigmoid": Sigmoid, "tanh": Tanh}
+
+
+class FCLayer(_Composite):
+    """Linear + activation. 'softmax' outputs logits: the softmax lives in CrossEntropy."""
+
+    def __init__(self, n_input, n_output, activation="relu"):
+        super().__init__()
+        self.activation = activation.lower()
+        if self.activation != "softmax" and self.activation not in _ACTIVATIONS:
+            raise ValueError(f"unknown activation {activation!r}")
+        init = "he" if self.activation == "relu" else "xavier"
+        self.linear = Linear(n_input, n_output, init=init)
+        self.act = None if self.activation == "softmax" else _ACTIVATIONS[self.activation]()
+
+    def unroll(self):
+        return [self.linear] + ([self.act] if self.act is not None else [])
+
+    def __repr__(self):
+        return f"FCLayer({self.linear.W.shape[0]}, {self.linear.W.shape[1]}, activation={self.activation!r})"
+
+
+class _LegacyModel:
+    """Facade compatible with the old API on top of a Sequential."""
+
+    def __init__(self, layers):
+        self.layers = list(layers)
+        self.model = Sequential(self.layers)
+
+    def forward(self, x):
+        return softmax(self.model.forward(np.asarray(x, dtype=self.model.dtype)))
+
+    def train(self, X, Y, epochs, lr=0.01, batch_size=1, optimizer=None,
+              validation_data=None, verbose=True, callbacks=()):
+        X, Y = self._prep_X(X), _from_legacy(Y)
+        if validation_data is not None:
+            validation_data = (self._prep_X(validation_data[0]), _from_legacy(validation_data[1]))
+        if verbose:
+            print(f"Training for {epochs} epochs...")
+        return self.model.fit(X, Y, epochs=epochs, batch_size=batch_size,
+                              optimizer=optimizer or SGD(lr=lr), loss=CrossEntropy(),
+                              validation_data=validation_data, verbose=verbose,
+                              callbacks=callbacks)
+
+    def test(self, X, Y, verbose=True):
+        _, acc = self.model.evaluate(self._prep_X(X), _from_legacy(Y))
+        if verbose:
+            print(f"Test accuracy: {acc * 100: .3f}%")
+        return acc
+
+    def predict(self, X):
+        return self.model.predict(self._prep_X(X))
+
+    def predict_proba(self, X):
+        return self.model.predict_proba(self._prep_X(X))
+
+    def save(self, path):
+        self.model.save(path)
+
+    def load(self, path):
+        self.model.load(path)
+
+    def _prep_X(self, X):
+        return _from_legacy(X)
+
+
+class NN(_LegacyModel):
+    def __init__(self, layers, function="relu"):
+        self.structure = list(layers)
+        self.input_size = layers[0]
+        self.function = function.lower()
+        if self.function not in _ACTIVATIONS:
+            raise ValueError(f"function must be one of {sorted(_ACTIVATIONS)}, got {function!r}")
+        fcs = [FCLayer(layers[i], layers[i + 1], self.function) for i in range(len(layers) - 2)]
+        fcs.append(FCLayer(layers[-2], layers[-1], "softmax"))
+        super().__init__(fcs)
+
+    def __repr__(self):
+        return f"NN structure: {self.structure}\n{self.model!r}"
